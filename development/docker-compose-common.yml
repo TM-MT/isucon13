@@ -19,9 +19,11 @@ services:
       - "MYSQL_ROOT_HOST=%"
       - "MYSQL_ROOT_PASSWORD=root"
     volumes:
+      - ./etc/my.cnf:/etc/my.cnf
       - ../webapp/sql/initdb.d:/docker-entrypoint-initdb.d
       - ./pdns/20_powerdns_schema.sql:/docker-entrypoint-initdb.d/20_powerdns_schema.sql
       - mysql_volume:/var/lib/mysql
+      - ../webapp/logs/mysql:/var/log/mysql
     ports:
       - "127.0.0.1:3306:3306"
     restart: always
