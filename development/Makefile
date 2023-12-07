@@ -1,15 +1,25 @@
-build/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml up --build
+LANG=rust
+DOCKER_COMPOSE=docker compose -f docker-compose-common.yml -f docker-compose-$(LANG).yml
 
-up/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml up
+build:
+	$(DOCKER_COMPOSE) up --build
 
-down/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml down --volumes
+up:
+	$(DOCKER_COMPOSE) up -d
 
-down-all/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml down --volumes --rmi local
+down:
+	$(DOCKER_COMPOSE) down --volumes
 
-top/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml top
+down-all:
+	$(DOCKER_COMPOSE) down --volumes --rmi local
 
+top:
+	$(DOCKER_COMPOSE) top
+
+logs:
+	$(DOCKER_COMPOSE) logs -f
+
+# データベースの中身を確認する
+.PHONY: exec-mysql
+exec-mysql:
+	$(DOCKER_COMPOSE) exec -- mysql mysql -u root -proot isupipe
