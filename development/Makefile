@@ -15,6 +15,10 @@ down:
 down-all:
 	$(DOCKER_COMPOSE) down --volumes --rmi local
 
+restart:
+	make down
+	make up
+
 top:
 	$(DOCKER_COMPOSE) top
 

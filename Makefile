@@ -14,21 +14,14 @@ default: help
 bench:
 	:> webapp/logs/nginx/access.log
 	:> $(LOG_FILE_MYSQL)
-	cd development && make truncate-mysql && cd ../
+	cd development && make restart && make truncate-mysql && cd ../
+	sleep 3
 	cd bench && make bench && cd ../
-	cd development && make analyze-mysql < performance_schema.sql > webapp/logs/mysql/performance_schema.tsv
+	cd development && make analyze-mysql
 
 .PHONY: logs
 logs:
 	cd development && make logs
-
-.PHONY: analyze-mysql-log
-analyze-mysql-log:
-	docker pull matsuu/pt-query-digest
-	cat $(LOG_FILE_MYSQL) | \
-		docker run --rm -i matsuu/pt-query-digest \
-			--group-by fingerprint | \
-		less
 
 .PHONY: help
 help:
