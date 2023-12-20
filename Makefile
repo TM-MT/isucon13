@@ -11,6 +11,8 @@ LOG_FILE_NGINX=webapp/logs/nginx/access.log
 .PHONY: default
 default: help
 
+## Run benchmark
+# Restart servers and run benchmark
 .PHONY: bench
 bench:
 	:> $(LOG_FILE_NGINX)
@@ -21,6 +23,8 @@ bench:
 	cd development && make analyze-mysql
 	make analyze-nginx-log
 
+## Monitors
+# Show servers log
 .PHONY: logs
 logs:
 	cd development && make logs
@@ -35,7 +39,7 @@ analyze-nginx-log:
 			--limit 100000 \
 			--sort=sum -r \
 			--matching-groups='/api/livestream/\d{4}/moderate$$,/api/livestream/\d{4}/statistics$$,/api/livestream/\d{4}/report$$,/api/livestream/\d{4}/ngwords$$,/api/livestream/\d{4}/exit$$,/api/livestream/\d{4}/enter$$,/api/livestream/\d{4}/livecomment$$,/api/livestream/\d{4}/livecomment/\d{4}/report$$,/api/livestream/\d{4}/reaction$$,/api/user/.*/statistics$$,/api/user/.*/icon$$,/api/user/.*/theme$$' \
-			> webapp/logs/nginx/analyzed
+			> webapp/logs/nginx/collected
 
 .PHONY: help
 help:

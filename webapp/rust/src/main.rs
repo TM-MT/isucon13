@@ -3,9 +3,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum_extra::extract::cookie::SignedCookieJar;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use sha2::Digest;
 use sqlx::mysql::{MySqlConnection, MySqlPool};
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 const DEFAULT_SESSION_ID_KEY: &str = "SESSIONID";
@@ -236,10 +239,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/user/:username/statistics",
             axum::routing::get(get_user_statistics_handler),
-        )
-        .route(
-            "/api/user/:username/icon",
-            axum::routing::get(get_icon_handler),
         )
         .route("/api/icon", axum::routing::post(post_icon_handler))
         // stats
@@ -1444,35 +1443,7 @@ struct PostIconResponse {
     id: i64,
 }
 
-async fn get_icon_handler(
-    State(AppState { pool, .. }): State<AppState>,
-    Path((username,)): Path<(String,)>,
-) -> Result<axum::response::Response, Error> {
-    use axum::response::IntoResponse as _;
-
-    let mut tx = pool.begin().await?;
-
-    let user: UserModel = sqlx::query_as("SELECT * FROM users WHERE name = ?")
-        .bind(username)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    let image: Option<Vec<u8>> = sqlx::query_scalar("SELECT image FROM icons WHERE user_id = ?")
-        .bind(user.id)
-        .fetch_optional(&mut *tx)
-        .await?;
-
-    let headers = [(axum::http::header::CONTENT_TYPE, "image/jpeg")];
-    if let Some(image) = image {
-        Ok((headers, image).into_response())
-    } else {
-        let file = tokio::fs::File::open(FALLBACK_IMAGE).await.unwrap();
-        let stream = tokio_util::io::ReaderStream::new(file);
-        let body = axum::body::StreamBody::new(stream);
-
-        Ok((headers, body).into_response())
-    }
-}
+const ICON_BASE_PATH: &str = "/home/isucon/webapp/public/icons";
 
 async fn post_icon_handler(
     State(AppState { pool, .. }): State<AppState>,
@@ -1488,6 +1459,9 @@ async fn post_icon_handler(
         .ok_or(Error::SessionError)?;
     let user_id: i64 = sess.get(DEFAULT_USER_ID_KEY).ok_or(Error::SessionError)?;
 
+    use sha2::digest::Digest as _;
+    let icon_hash = sha2::Sha256::digest(&req.image);
+
     let mut tx = pool.begin().await?;
 
     sqlx::query("DELETE FROM icons WHERE user_id = ?")
@@ -1495,14 +1469,23 @@ async fn post_icon_handler(
         .execute(&mut *tx)
         .await?;
 
-    let rs = sqlx::query("INSERT INTO icons (user_id, image) VALUES (?, ?)")
+    let rs = sqlx::query("INSERT INTO icons (user_id,icon_hash) VALUES (?,?)")
         .bind(user_id)
-        .bind(req.image)
+        .bind(format!("{:x}", icon_hash))
         .execute(&mut *tx)
         .await?;
     let icon_id = rs.last_insert_id() as i64;
-
+    let user_name: String = sqlx::query_scalar("SELECT name FROM users WHERE id=?")
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(Error::NotFound(
+            "No user found for the userid in session".into(),
+        ))?;
     tx.commit().await?;
+
+    let mut file = File::create(format!("{ICON_BASE_PATH}/{0}.jpg", user_name)).unwrap();
+    file.write_all(&req.image).unwrap();
 
     Ok((
         StatusCode::CREATED,
@@ -1706,23 +1689,30 @@ async fn verify_user_session(jar: &SignedCookieJar) -> Result<(), Error> {
     Ok(())
 }
 
+static DEFAULT_ICON_HASH: OnceLock<String> = OnceLock::new();
+fn default_icon_hash() -> String {
+    DEFAULT_ICON_HASH
+        .get_or_init(|| {
+            let mut file = File::open(FALLBACK_IMAGE).unwrap();
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf).unwrap();
+            let icon_hash = format!("{:x}", sha2::Sha256::digest(buf));
+            icon_hash
+        })
+        .to_string()
+}
+
 async fn fill_user_response(tx: &mut MySqlConnection, user_model: UserModel) -> sqlx::Result<User> {
     let theme_model: ThemeModel = sqlx::query_as("SELECT * FROM themes WHERE user_id = ?")
         .bind(user_model.id)
         .fetch_one(&mut *tx)
         .await?;
 
-    let image: Option<Vec<u8>> = sqlx::query_scalar("SELECT image FROM icons WHERE user_id = ?")
+    let icon_hash: String = sqlx::query_scalar("SELECT icon_hash FROM icons WHERE user_id = ?")
         .bind(user_model.id)
         .fetch_optional(&mut *tx)
-        .await?;
-    let image = if let Some(image) = image {
-        image
-    } else {
-        tokio::fs::read(FALLBACK_IMAGE).await?
-    };
-    use sha2::digest::Digest as _;
-    let icon_hash = sha2::Sha256::digest(image);
+        .await?
+        .unwrap_or(default_icon_hash());
 
     Ok(User {
         id: user_model.id,
@@ -1733,7 +1723,7 @@ async fn fill_user_response(tx: &mut MySqlConnection, user_model: UserModel) -> 
             id: theme_model.id,
             dark_mode: theme_model.dark_mode,
         },
-        icon_hash: format!("{:x}", icon_hash),
+        icon_hash,
     })
 }
 

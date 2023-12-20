@@ -4,7 +4,7 @@ DOCKER_COMPOSE=docker compose -f docker-compose-common.yml -f docker-compose-rus
 default: help
 
 build:
-	$(DOCKER_COMPOSE) up --build
+	$(DOCKER_COMPOSE) build
 
 up:
 	$(DOCKER_COMPOSE) up -d
