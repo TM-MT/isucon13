@@ -1373,6 +1373,12 @@ struct UserModel {
     hashed_password: Option<String>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct UserRankModel {
+    user_id: i64,
+    user_rank: u64,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct User {
     id: i64,
@@ -1752,12 +1758,6 @@ struct UserStatistics {
     favorite_emoji: String,
 }
 
-#[derive(Debug)]
-struct UserRankingEntry {
-    username: String,
-    score: i64,
-}
-
 /// MySQL で COUNT()、SUM() 等を使って DECIMAL 型の値になったものを i64 に変換するための構造体。
 #[derive(Debug)]
 struct MysqlDecimal(i64);
@@ -1817,52 +1817,22 @@ async fn get_user_statistics_handler(
         .await?
         .ok_or(Error::BadRequest("".into()))?;
 
-    // ランク算出
-    let users: Vec<UserModel> = sqlx::query_as("SELECT * FROM users")
-        .fetch_all(&mut *tx)
-        .await?;
-
-    let mut ranking = Vec::new();
-    for user in users {
-        let query = r#"
-        SELECT COUNT(*) FROM users u
-        INNER JOIN livestreams l ON l.user_id = u.id
-        INNER JOIN reactions r ON r.livestream_id = l.id
-        WHERE u.id = ?
-        "#;
-        let MysqlDecimal(reactions) = sqlx::query_scalar(query)
-            .bind(user.id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let query = r#"
-        SELECT IFNULL(SUM(l2.tip), 0) FROM users u
-        INNER JOIN livestreams l ON l.user_id = u.id
-        INNER JOIN livecomments l2 ON l2.livestream_id = l.id
-        WHERE u.id = ?
-        "#;
-        let MysqlDecimal(tips) = sqlx::query_scalar(query)
-            .bind(user.id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let score = reactions + tips;
-        ranking.push(UserRankingEntry {
-            username: user.name,
-            score,
-        });
-    }
-    ranking.sort_by(|a, b| {
-        a.score
-            .cmp(&b.score)
-            .then_with(|| a.username.cmp(&b.username))
-    });
-
-    let rpos = ranking
-        .iter()
-        .rposition(|entry| entry.username == username)
-        .unwrap();
-    let rank = (ranking.len() - rpos) as i64;
+    let query = r"#
+    SELECT 
+        u.id AS user_id,
+        (SELECT COUNT(*) FROM users) + 1 - RANK() OVER (ORDER BY (COUNT(r.id) + IFNULL(SUM(l2.tip), 0)),u.name) AS user_rank
+    FROM users u
+    LEFT JOIN livestreams l ON l.user_id = u.id
+    LEFT JOIN reactions r ON r.livestream_id = l.id
+    LEFT JOIN livecomments l2 ON l2.livestream_id = l.id
+    GROUP BY u.id
+    #";
+    let user_ranks: Vec<UserRankModel> = sqlx::query_as(query).fetch_all(&mut *tx).await?;
+    let rank = user_ranks
+        .into_iter()
+        .find(|ur| ur.user_id == user.id)
+        .unwrap()
+        .user_rank;
 
     // リアクション数
     let query = r"#
@@ -1928,7 +1898,7 @@ async fn get_user_statistics_handler(
         .unwrap_or_default();
 
     Ok(axum::Json(UserStatistics {
-        rank,
+        rank: rank as i64,
         viewers_count,
         total_reactions,
         total_livecomments,
