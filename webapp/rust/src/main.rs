@@ -379,6 +379,7 @@ struct Livestream {
 struct LivestreamTagModel {
     #[allow(unused)]
     id: i64,
+    #[allow(unused)]
     livestream_id: i64,
     tag_id: i64,
 }
@@ -548,31 +549,21 @@ async fn search_livestreams_handler(
         sqlx::query_as(&query).fetch_all(&mut *tx).await?
     } else {
         // タグによる取得
-        let tag_id_list: Vec<i64> = sqlx::query_scalar("SELECT id FROM tags WHERE name = ?")
+        let query = r#"
+            SELECT *
+            FROM livestreams l
+            WHERE l.id IN (
+                    SELECT livestream_id
+                    FROM livestream_tags lt
+                    LEFT JOIN tags t ON lt.tag_id=t.id
+                    WHERE t.name=?
+                )
+            ORDER BY l.id DESC
+            "#;
+        sqlx::query_as(query)
             .bind(key_tag_name)
             .fetch_all(&mut *tx)
-            .await?;
-
-        let mut query_builder = sqlx::query_builder::QueryBuilder::new(
-            "SELECT * FROM livestream_tags WHERE tag_id IN (",
-        );
-        let mut separated = query_builder.separated(", ");
-        for tag_id in tag_id_list {
-            separated.push_bind(tag_id);
-        }
-        separated.push_unseparated(") ORDER BY livestream_id DESC");
-        let key_tagged_livestreams: Vec<LivestreamTagModel> =
-            query_builder.build_query_as().fetch_all(&mut *tx).await?;
-
-        let mut livestream_models = Vec::new();
-        for key_tagged_livestream in key_tagged_livestreams {
-            let ls = sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-                .bind(key_tagged_livestream.livestream_id)
-                .fetch_one(&mut *tx)
-                .await?;
-            livestream_models.push(ls);
-        }
-        livestream_models
+            .await?
     };
 
     let mut livestreams = Vec::with_capacity(livestream_models.len());
@@ -787,23 +778,23 @@ async fn fill_livestream_response(
         .await?;
     let owner = fill_user_response(tx, owner_model).await?;
 
-    let livestream_tag_models: Vec<LivestreamTagModel> =
-        sqlx::query_as("SELECT * FROM livestream_tags WHERE livestream_id = ?")
-            .bind(livestream_model.id)
-            .fetch_all(&mut *tx)
-            .await?;
-
-    let mut tags = Vec::with_capacity(livestream_tag_models.len());
-    for livestream_tag_model in livestream_tag_models {
-        let tag_model: TagModel = sqlx::query_as("SELECT * FROM tags WHERE id = ?")
-            .bind(livestream_tag_model.tag_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        tags.push(Tag {
+    let query = r#"
+    SELECT t.*
+    FROM tags t
+    LEFT JOIN livestream_tags lt ON t.id=lt.tag_id
+    WHERE livestream_id=?
+    "#;
+    let tag_models: Vec<TagModel> = sqlx::query_as(query)
+        .bind(livestream_model.id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let tags = tag_models
+        .into_iter()
+        .map(|tag_model| Tag {
             id: tag_model.id,
             name: tag_model.name,
-        });
-    }
+        })
+        .collect();
 
     Ok(Livestream {
         id: livestream_model.id,
