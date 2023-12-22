@@ -68,6 +68,12 @@ mysql -u"$ISUCON_DB_USER" \
 		--port "$ISUCON_DB_PORT" \
 		"$ISUCON_DB_NAME" < initial_livecomments.sql
 
+QUERY="TRUNCATE TABLE performance_schema.events_statements_summary_by_digest"
+mysql -u root -proot isupipe  \
+		--host "$ISUCON_DB_HOST" \
+		--port "$ISUCON_DB_PORT" \
+		-e "${QUERY}"
+
 bash ../pdns/init_zone.sh 
 
 find /home/isucon/webapp/public/icons -type f ! -name 'NoImage*' -exec rm {} +
