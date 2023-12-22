@@ -11,8 +11,10 @@ axum-extra = { version = "0.8", features = ["cookie-signed", "cookie-key-expansi
 base64 = "0.21"
 bcrypt = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
 hyper = "0.14"
 listenfd = "1"
+moka = { version = "0.12", features = ["future"] }
 num-traits = "0.2"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
