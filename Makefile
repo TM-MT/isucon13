@@ -38,7 +38,7 @@ analyze-nginx-log:
 			-o count,method,uri,min,avg,max,sum \
 			--limit 100000 \
 			--sort=sum -r \
-			--matching-groups='/api/livestream/\d{4}/moderate$$,/api/livestream/\d{4}/statistics$$,/api/livestream/\d{4}/report$$,/api/livestream/\d{4}/ngwords$$,/api/livestream/\d{4}/exit$$,/api/livestream/\d{4}/enter$$,/api/livestream/\d{4}/livecomment$$,/api/livestream/\d{4}/livecomment/\d{4}/report$$,/api/livestream/\d{4}/reaction$$,/api/user/.*/statistics$$,/api/user/.*/icon$$,/api/user/.*/theme$$' \
+			--matching-groups='/api/livestream/\d{4}/moderate$$,/api/livestream/\d{4}/statistics$$,/api/livestream/\d{4}/report$$,/api/livestream/\d{4}/ngwords$$,/api/livestream/\d{4}/exit$$,/api/livestream/\d{4}/enter$$,/api/livestream/\d{4}/livecomment$$,/api/livestream/\d{4}/livecomment/\d{4}/report$$,/api/livestream/\d{4}/reaction$$,/api/user/.*/statistics$$,/api/user/.*/icon$$,/api/user/.*/livestream$$,/api/user/.*/theme$$' \
 			> webapp/logs/nginx/collected
 
 .PHONY: help
