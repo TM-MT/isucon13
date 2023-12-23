@@ -785,18 +785,23 @@ async fn fill_user_response_from(tx: &mut MySqlConnection, user_id: i64) -> sqlx
     fill_user_response(tx, owner_model).await
 }
 
+async fn get_user_or_insert(
+    tx: &mut MySqlConnection,
+    user_id: i64,
+    user_cache: &UserCache,
+) -> sqlx::Result<User> {
+    Ok(user_cache
+        .try_get_with(user_id, fill_user_response_from(tx, user_id))
+        .await
+        .unwrap())
+}
+
 async fn fill_livestream_response(
     tx: &mut MySqlConnection,
     livestream_model: LivestreamModel,
     user_cache: &UserCache,
 ) -> sqlx::Result<Livestream> {
-    let owner = user_cache
-        .try_get_with(
-            livestream_model.user_id,
-            fill_user_response_from(tx, livestream_model.user_id),
-        )
-        .await
-        .unwrap();
+    let owner = get_user_or_insert(tx, livestream_model.user_id, user_cache).await?;
 
     let query = r#"
     SELECT t.*
@@ -1203,11 +1208,7 @@ async fn fill_livecomment_response(
     livecomment_model: LivecommentModel,
     user_cache: &UserCache,
 ) -> sqlx::Result<Livecomment> {
-    let comment_owner_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(livecomment_model.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let comment_owner = fill_user_response(&mut *tx, comment_owner_model).await?;
+    let comment_owner = get_user_or_insert(tx, livecomment_model.user_id, user_cache).await?;
 
     let livestream_model: LivestreamModel =
         sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
@@ -1231,11 +1232,7 @@ async fn fill_livecomment_report_response(
     report_model: LivecommentReportModel,
     user_cache: &UserCache,
 ) -> sqlx::Result<LivecommentReport> {
-    let reporter_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(report_model.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let reporter = fill_user_response(&mut *tx, reporter_model).await?;
+    let reporter = get_user_or_insert(tx, report_model.user_id, user_cache).await?;
 
     let livecomment_model: LivecommentModel =
         sqlx::query_as("SELECT * FROM livecomments WHERE id = ?")
