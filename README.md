@@ -40,6 +40,19 @@ ISUCON13で使用したTLS証明書は `provisioning/ansible/roles/nginx/files/e
   - VolumeType: gp3 40GB
 - ベンチマーカー VM 1台
   - ECS Fargate (8vCPU, 8GB Mem)
+ 
+## static file 作成
+
+```sh
+$ cd frontend
+$ corepack enable
+$ yarn
+$ yarn build
+$ cp -r dist/ ../webapp/public
+$ cd ../webapp/public
+$ mkdir -p icons
+$ cp ../img/NoImage.jpg  ./icons/
+```
 
 ## docker compose での構築方法
 
