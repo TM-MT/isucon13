@@ -75,6 +75,7 @@ $ make build # to build the program
 $ make bench # to run
 
 # OR at PROJECT ROOT DIR
+# いい感じに webapp/logs/nginx 配下のパーミッションを設定する
 $ make bench # to restart all system and clear metrics, and start bench
 ```
 
