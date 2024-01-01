@@ -2,8 +2,6 @@ version: '3.0'
 
 services:
   webapp:
-    cpus: 2
-    mem_limit: 4g
     build:
       context: ../webapp/rust
     init: true
@@ -22,6 +20,11 @@ services:
       ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS: 127.0.0.1
     ports:
       - "127.0.0.1:8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4g
     depends_on:
       mysql:
         condition: service_healthy

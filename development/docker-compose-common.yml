@@ -12,6 +12,11 @@ services:
       - 80:80
     depends_on:
       - webapp
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4g
   mysql:
     image: mysql/mysql-server:8.0.31
     container_name: mysql
@@ -27,6 +32,11 @@ services:
     ports:
       - "127.0.0.1:3306:3306"
     restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4g
     healthcheck:
       test: mysqladmin ping -h 127.0.0.1 -uisucon -pisucon
       interval: 1s
@@ -54,6 +64,11 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4g
 
 volumes:
   mysql_volume:
