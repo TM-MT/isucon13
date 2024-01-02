@@ -1196,7 +1196,7 @@ async fn fill_livecomment_response(
             .bind(livecomment_model.livestream_id)
             .fetch_one(&mut *tx)
             .await?;
-    let livestream = fill_livestream_response(&mut *tx, livestream_model, &user_cache).await?;
+    let livestream = fill_livestream_response(&mut *tx, livestream_model, user_cache).await?;
 
     Ok(Livecomment {
         id: livecomment_model.id,
@@ -1220,7 +1220,7 @@ async fn fill_livecomment_report_response(
             .bind(report_model.livecomment_id)
             .fetch_one(&mut *tx)
             .await?;
-    let livecomment = fill_livecomment_response(&mut *tx, livecomment_model, &user_cache).await?;
+    let livecomment = fill_livecomment_response(&mut *tx, livecomment_model, user_cache).await?;
 
     Ok(LivecommentReport {
         id: report_model.id,
@@ -1358,7 +1358,7 @@ async fn fill_reaction_response(
             .bind(reaction_model.livestream_id)
             .fetch_one(&mut *tx)
             .await?;
-    let livestream = fill_livestream_response(&mut *tx, livestream_model, &user_cache).await?;
+    let livestream = fill_livestream_response(&mut *tx, livestream_model, user_cache).await?;
 
     Ok(Reaction {
         id: reaction_model.id,
