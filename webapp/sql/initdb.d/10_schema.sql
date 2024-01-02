@@ -7,6 +7,7 @@ CREATE TABLE `users` (
   `display_name` VARCHAR(255) NOT NULL,
   `password` VARCHAR(255) NOT NULL,
   `description` TEXT NOT NULL,
+  `dark_mode` BOOLEAN NOT NULL,
   UNIQUE `uniq_user_name` (`name`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
@@ -17,13 +18,6 @@ CREATE TABLE `icons` (
   `icon_hash` VARCHAR(255) NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE INDEX icons_user_id ON icons(user_id);
-
--- ユーザごとのカスタムテーマ
-CREATE TABLE `themes` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  `user_id` BIGINT NOT NULL,
-  `dark_mode` BOOLEAN NOT NULL
-) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
 -- ライブ配信
 CREATE TABLE `livestreams` (

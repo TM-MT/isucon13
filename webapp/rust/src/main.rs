@@ -310,26 +310,17 @@ async fn get_streamer_theme_handler(
 ) -> Result<axum::Json<Theme>, Error> {
     verify_user_session(&jar).await?;
 
-    let mut tx = pool.begin().await?;
-
-    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE name = ?")
+    let user_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE name = ?")
         .bind(username)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&pool)
         .await?
         .ok_or(Error::NotFound(
             "not found user that has the given username".into(),
         ))?;
 
-    let theme_model: ThemeModel = sqlx::query_as("SELECT * FROM themes WHERE user_id = ?")
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    tx.commit().await?;
-
     Ok(axum::Json(Theme {
-        id: theme_model.id,
-        dark_mode: theme_model.dark_mode,
+        id: user_model.id,
+        dark_mode: user_model.dark_mode,
     }))
 }
 
@@ -1386,6 +1377,7 @@ struct UserModel {
     description: Option<String>,
     #[sqlx(default, rename = "password")]
     hashed_password: Option<String>,
+    dark_mode: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1409,14 +1401,6 @@ struct User {
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 struct Theme {
     id: i64,
-    dark_mode: bool,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct ThemeModel {
-    id: i64,
-    #[allow(unused)]
-    user_id: i64,
     dark_mode: bool,
 }
 
@@ -1563,21 +1547,16 @@ async fn register_handler(
     let mut tx = pool.begin().await?;
 
     let result = sqlx::query(
-        "INSERT INTO users (name, display_name, description, password) VALUES(?, ?, ?, ?)",
+        "INSERT INTO users (name, display_name, description, password, dark_mode) VALUES(?, ?, ?, ?, ?)",
     )
     .bind(&req.name)
     .bind(&req.display_name)
     .bind(&req.description)
     .bind(&hashed_password)
+    .bind(req.theme.dark_mode)
     .execute(&mut *tx)
     .await?;
     let user_id = result.last_insert_id() as i64;
-
-    sqlx::query("INSERT INTO themes (user_id, dark_mode) VALUES(?, ?)")
-        .bind(user_id)
-        .bind(req.theme.dark_mode)
-        .execute(&mut *tx)
-        .await?;
 
     let user = fill_user_response(
         &mut tx,
@@ -1587,6 +1566,7 @@ async fn register_handler(
             display_name: Some(req.display_name),
             description: Some(req.description),
             hashed_password: Some(hashed_password),
+            dark_mode: req.theme.dark_mode,
         },
     )
     .await?;
@@ -1706,11 +1686,6 @@ fn default_icon_hash() -> String {
 }
 
 async fn fill_user_response(tx: &mut MySqlConnection, user_model: UserModel) -> sqlx::Result<User> {
-    let theme_model: ThemeModel = sqlx::query_as("SELECT * FROM themes WHERE user_id = ?")
-        .bind(user_model.id)
-        .fetch_one(&mut *tx)
-        .await?;
-
     let icon_hash: String = sqlx::query_scalar("SELECT icon_hash FROM icons WHERE user_id = ?")
         .bind(user_model.id)
         .fetch_optional(&mut *tx)
@@ -1723,8 +1698,8 @@ async fn fill_user_response(tx: &mut MySqlConnection, user_model: UserModel) -> 
         display_name: user_model.display_name,
         description: user_model.description,
         theme: Theme {
-            id: theme_model.id,
-            dark_mode: theme_model.dark_mode,
+            id: user_model.id,
+            dark_mode: user_model.dark_mode,
         },
         icon_hash,
     })
