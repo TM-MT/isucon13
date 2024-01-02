@@ -7,6 +7,7 @@ DOCKER_RMI=docker rmi -f
 ISUPIPE_TAG=isupipe:latest
 LOG_FILE_MYSQL=webapp/logs/mysql/mysql-slow.log
 LOG_FILE_NGINX=webapp/logs/nginx/access.log
+LOG_ERROR_FILE_NGINX=webapp/logs/nginx/error.log
 
 .PHONY: default
 default: help
@@ -16,6 +17,7 @@ default: help
 .PHONY: bench
 bench:
 	:> $(LOG_FILE_NGINX)
+	:> $(LOG_ERROR_FILE_NGINX)
 	:> $(LOG_FILE_MYSQL)
 	cd development && make restart && make truncate-mysql && cd ../
 	sleep 3
