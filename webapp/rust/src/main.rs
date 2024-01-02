@@ -9,7 +9,7 @@ use sqlx::mysql::{MySqlConnection, MySqlPool};
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 const DEFAULT_SESSION_ID_KEY: &str = "SESSIONID";
@@ -76,7 +76,6 @@ type UserCache = Cache<i64, User>;
 struct AppState {
     pool: MySqlPool,
     key: axum_extra::extract::cookie::Key,
-    powerdns_subdomain_address: Arc<String>,
     user_cache: UserCache,
 }
 impl axum::extract::FromRef<AppState> for axum_extra::extract::cookie::Key {
@@ -150,14 +149,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         secret.into_bytes()
     } else {
         DEFAULT_SECRET.to_owned()
-    };
-
-    const POWERDNS_SUBDOMAIN_ADDRESS_ENV_KEY: &str = "ISUCON13_POWERDNS_SUBDOMAIN_ADDRESS";
-    let Ok(powerdns_subdomain_address) = std::env::var(POWERDNS_SUBDOMAIN_ADDRESS_ENV_KEY) else {
-        panic!(
-            "environ {} must be provided",
-            POWERDNS_SUBDOMAIN_ADDRESS_ENV_KEY
-        );
     };
 
     let app = axum::Router::new()
@@ -255,7 +246,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(AppState {
             pool,
             key: axum_extra::extract::cookie::Key::derive_from(&secret),
-            powerdns_subdomain_address: Arc::new(powerdns_subdomain_address),
             user_cache: Cache::new(1000),
         })
         .layer(tower_http::trace::TraceLayer::new_for_http());
@@ -1560,11 +1550,7 @@ async fn get_me_handler(
 // ユーザ登録API
 // POST /api/register
 async fn register_handler(
-    State(AppState {
-        pool,
-        powerdns_subdomain_address,
-        ..
-    }): State<AppState>,
+    State(AppState { pool, .. }): State<AppState>,
     axum::Json(req): axum::Json<PostUserRequest>,
 ) -> Result<(StatusCode, axum::Json<User>), Error> {
     if req.name == "pipe" {
@@ -1592,23 +1578,6 @@ async fn register_handler(
         .bind(req.theme.dark_mode)
         .execute(&mut *tx)
         .await?;
-
-    let output = tokio::process::Command::new("pdnsutil")
-        .arg("add-record")
-        .arg("u.isucon.dev")
-        .arg(&req.name)
-        .arg("A")
-        .arg("0")
-        .arg(&*powerdns_subdomain_address)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(Error::InternalServerError(format!(
-            "pdnsutil failed with stdout={} stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )));
-    }
 
     let user = fill_user_response(
         &mut tx,
