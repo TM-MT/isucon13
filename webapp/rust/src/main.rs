@@ -1714,10 +1714,10 @@ struct LivestreamStatistics {
     max_tip: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 struct LivestreamRankingEntry {
     livestream_id: i64,
-    score: i64,
+    live_rank: u64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1887,47 +1887,31 @@ async fn get_livestream_statistics_handler(
     verify_user_session(&jar).await?;
 
     let mut tx = pool.begin().await?;
-
-    let _: LivestreamModel = sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-        .bind(livestream_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(Error::BadRequest("".into()))?;
-
-    let livestreams: Vec<LivestreamModel> = sqlx::query_as("SELECT * FROM livestreams")
-        .fetch_all(&mut *tx)
-        .await?;
-
-    // ランク算出
-    let mut ranking = Vec::new();
-    for livestream in livestreams {
-        let MysqlDecimal(reactions) = sqlx::query_scalar("SELECT COUNT(*) FROM livestreams l INNER JOIN reactions r ON l.id = r.livestream_id WHERE l.id = ?")
-            .bind(livestream.id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let MysqlDecimal(total_tips) = sqlx::query_scalar("SELECT IFNULL(SUM(l2.tip), 0) FROM livestreams l INNER JOIN livecomments l2 ON l.id = l2.livestream_id WHERE l.id = ?")
-            .bind(livestream.id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let score = reactions + total_tips;
-        ranking.push(LivestreamRankingEntry {
-            livestream_id: livestream.id,
-            score,
-        })
-    }
-    ranking.sort_by(|a, b| {
-        a.score
-            .cmp(&b.score)
-            .then_with(|| a.livestream_id.cmp(&b.livestream_id))
-    });
-
-    let rpos = ranking
-        .iter()
-        .rposition(|entry| entry.livestream_id == livestream_id)
-        .unwrap();
-    let rank = (ranking.len() - rpos) as i64;
+    let query = r#"
+        WITH c AS (
+            SELECT l.id AS id,COUNT(*) AS c
+            FROM livestreams l
+            INNER JOIN reactions r ON l.id = r.livestream_id
+            GROUP BY l.id
+        ), tips AS (
+            SELECT l.id AS id,IFNULL(SUM(l2.tip), 0) AS sum_tips
+            FROM livestreams l
+            INNER JOIN livecomments l2 ON l.id = l2.livestream_id
+            GROUP BY l.id
+        )
+        SELECT
+            l.id AS livestream_id,
+            (SELECT COUNT(*) FROM livestreams) + 1 - RANK() OVER (ORDER BY IFNULL(c.c, 0) + IFNULL(tips.sum_tips, 0), l.id) AS live_rank
+        FROM livestreams l
+        LEFT JOIN c ON l.id=c.id
+        LEFT JOIN tips ON l.id=tips.id
+    "#;
+    let ranks: Vec<LivestreamRankingEntry> = sqlx::query_as(query).fetch_all(&mut *tx).await?;
+    let rank = ranks
+        .into_iter()
+        .find(|entry| entry.livestream_id == livestream_id)
+        .ok_or(Error::BadRequest("".into()))?
+        .live_rank;
 
     // 視聴者数算出
     let MysqlDecimal(viewers_count) = sqlx::query_scalar("SELECT COUNT(*) FROM livestreams l INNER JOIN livestream_viewers_history h ON h.livestream_id = l.id WHERE l.id = ?")
@@ -1956,7 +1940,7 @@ async fn get_livestream_statistics_handler(
     tx.commit().await?;
 
     Ok(axum::Json(LivestreamStatistics {
-        rank,
+        rank: rank as i64,
         viewers_count,
         max_tip,
         total_reactions,
