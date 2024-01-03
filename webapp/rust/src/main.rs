@@ -6,7 +6,10 @@ use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use moka::future::Cache;
 use sha2::Digest;
 use sqlx::mysql::{MySqlConnection, MySqlPool};
+use sqlx::prelude::FromRow;
+use sqlx::QueryBuilder;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::OnceLock;
@@ -263,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, Clone)]
 struct Tag {
     id: i64,
     name: String,
@@ -358,6 +361,22 @@ struct Livestream {
     tags: Vec<Tag>,
     start_at: i64,
     end_at: i64,
+}
+
+impl From<(LivestreamModel, Vec<Tag>, User)> for Livestream {
+    fn from((livestream_model, tags, owner): (LivestreamModel, Vec<Tag>, User)) -> Self {
+        Livestream {
+            id: livestream_model.id,
+            owner,
+            title: livestream_model.title,
+            tags,
+            description: livestream_model.description,
+            playlist_url: livestream_model.playlist_url,
+            thumbnail_url: livestream_model.thumbnail_url,
+            start_at: livestream_model.start_at,
+            end_at: livestream_model.end_at,
+        }
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -547,11 +566,7 @@ async fn search_livestreams_handler(
             .await?
     };
 
-    let mut livestreams = Vec::with_capacity(livestream_models.len());
-    for livestream_model in livestream_models {
-        let livestream = fill_livestream_response(&mut tx, livestream_model, &user_cache).await?;
-        livestreams.push(livestream);
-    }
+    let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
 
@@ -580,11 +595,7 @@ async fn get_my_livestreams_handler(
             .bind(user_id)
             .fetch_all(&mut *tx)
             .await?;
-    let mut livestreams = Vec::with_capacity(livestream_models.len());
-    for livestream_model in livestream_models {
-        let livestream = fill_livestream_response(&mut tx, livestream_model, &user_cache).await?;
-        livestreams.push(livestream);
-    }
+    let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
 
@@ -613,11 +624,7 @@ async fn get_user_livestreams_handler(
             .bind(user.id)
             .fetch_all(&mut *tx)
             .await?;
-    let mut livestreams = Vec::with_capacity(livestream_models.len());
-    for livestream_model in livestream_models {
-        let livestream = fill_livestream_response(&mut tx, livestream_model, &user_cache).await?;
-        livestreams.push(livestream);
-    }
+    let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
 
@@ -777,6 +784,67 @@ async fn get_user_or_insert(
         .unwrap())
 }
 
+#[derive(FromRow)]
+struct TagModelWithLivestreamId {
+    livestream_id: i64,
+    id: i64,
+    name: String,
+}
+
+async fn fill_tags_for_livestreams(
+    tx: &mut MySqlConnection,
+    livestream_models: &Vec<LivestreamModel>,
+) -> sqlx::Result<HashMap<i64, Vec<Tag>>> {
+    let mut query_builder = QueryBuilder::new(
+        r#"
+        SELECT lt.livestream_id, t.*
+        FROM tags t
+        LEFT JOIN livestream_tags lt ON t.id=lt.tag_id
+        WHERE livestream_id IN ("#,
+    );
+
+    let mut separated = query_builder.separated(", ");
+    for livestream_model in livestream_models {
+        separated.push_bind(livestream_model.id);
+    }
+    separated.push_unseparated(") ");
+
+    let models: Vec<TagModelWithLivestreamId> =
+        query_builder.build_query_as().fetch_all(&mut *tx).await?;
+    let mut map = HashMap::new();
+    models.into_iter().for_each(|m| {
+        map.entry(m.livestream_id)
+            .and_modify(|tags: &mut Vec<Tag>| {
+                tags.push(Tag {
+                    id: m.id,
+                    name: m.name.clone(),
+                })
+            })
+            .or_insert(vec![Tag {
+                id: m.id,
+                name: m.name.clone(),
+            }]);
+    });
+    Ok(map)
+}
+
+async fn fill_livestream_responses(
+    tx: &mut MySqlConnection,
+    livestream_models: Vec<LivestreamModel>,
+    user_cache: &UserCache,
+) -> sqlx::Result<Vec<Livestream>> {
+    let tag_map = fill_tags_for_livestreams(tx, &livestream_models).await?;
+
+    let mut res = Vec::with_capacity(livestream_models.len());
+
+    for model in livestream_models.into_iter() {
+        let owner = get_user_or_insert(tx, model.user_id, user_cache).await?;
+        let tags: Vec<Tag> = tag_map.get(&model.id).unwrap_or(&Vec::new()).to_vec();
+        res.push(Livestream::from((model, tags, owner)));
+    }
+    Ok(res)
+}
+
 async fn fill_livestream_response(
     tx: &mut MySqlConnection,
     livestream_model: LivestreamModel,
@@ -802,17 +870,7 @@ async fn fill_livestream_response(
         })
         .collect();
 
-    Ok(Livestream {
-        id: livestream_model.id,
-        owner,
-        title: livestream_model.title,
-        tags,
-        description: livestream_model.description,
-        playlist_url: livestream_model.playlist_url,
-        thumbnail_url: livestream_model.thumbnail_url,
-        start_at: livestream_model.start_at,
-        end_at: livestream_model.end_at,
-    })
+    Ok(Livestream::from((livestream_model, tags, owner)))
 }
 
 #[derive(Debug, serde::Deserialize)]
