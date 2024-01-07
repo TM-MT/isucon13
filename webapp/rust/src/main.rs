@@ -77,6 +77,8 @@ type UserCache = Cache<i64, User>;
 /// livestream id to tags
 type TagsCache = Cache<i64, Vec<Tag>>;
 type UserIdToLivestreamsCache = Cache<i64, Vec<LivestreamModel>>;
+/// livestream id to model
+type LivestreamCache = Cache<i64, Option<LivestreamModel>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -86,6 +88,7 @@ struct AppState {
     /// livestream id to tags
     tags_cache: TagsCache,
     user_id_to_livestreams_cache: UserIdToLivestreamsCache,
+    livestream_cache: LivestreamCache,
 }
 impl axum::extract::FromRef<AppState> for axum_extra::extract::cookie::Key {
     fn from_ref(state: &AppState) -> Self {
@@ -270,6 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             user_cache: Cache::new(1000),
             tags_cache: Cache::new(1000),
             user_id_to_livestreams_cache: Cache::new(1000),
+            livestream_cache: Cache::new(1000),
         })
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -739,11 +743,32 @@ async fn exit_livestream_handler(
     Ok(())
 }
 
+async fn get_livestream_model(
+    tx: &mut MySqlConnection,
+    livestream_id: i64,
+) -> sqlx::Result<Option<LivestreamModel>> {
+    Ok(sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
+        .bind(livestream_id)
+        .fetch_optional(&mut *tx)
+        .await?)
+}
+async fn get_livestream_model_or_insert(
+    tx: &mut MySqlConnection,
+    livestream_cache: &LivestreamCache,
+    livestream_id: i64,
+) -> Option<LivestreamModel> {
+    livestream_cache
+        .try_get_with(livestream_id, get_livestream_model(tx, livestream_id))
+        .await
+        .unwrap()
+}
+
 async fn get_livestream_handler(
     State(AppState {
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -754,10 +779,8 @@ async fn get_livestream_handler(
     let mut tx = pool.begin().await?;
 
     let livestream_model: LivestreamModel =
-        sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-            .bind(livestream_id)
-            .fetch_optional(&mut *tx)
-            .await?
+        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
+            .await
             .ok_or(Error::NotFound(
                 "not found livestream that has the given id".into(),
             ))?;
@@ -775,6 +798,7 @@ async fn get_livecomment_reports_handler(
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -792,10 +816,9 @@ async fn get_livecomment_reports_handler(
     let mut tx = pool.begin().await?;
 
     let livestream_model: LivestreamModel =
-        sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-            .bind(livestream_id)
-            .fetch_one(&mut *tx)
-            .await?;
+        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
+            .await
+            .ok_or(Error::Sqlx(sqlx::Error::RowNotFound))?;
 
     if livestream_model.user_id != user_id {
         return Err(Error::Forbidden(
@@ -811,9 +834,14 @@ async fn get_livecomment_reports_handler(
 
     let mut reports = Vec::with_capacity(report_models.len());
     for report_model in report_models {
-        let report =
-            fill_livecomment_report_response(&mut tx, report_model, &user_cache, &tags_cache)
-                .await?;
+        let report = fill_livecomment_report_response(
+            &mut tx,
+            report_model,
+            &user_cache,
+            &tags_cache,
+            &livestream_cache,
+        )
+        .await?;
         reports.push(report);
     }
 
@@ -1017,6 +1045,7 @@ async fn get_livecomments_handler(
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -1041,8 +1070,14 @@ async fn get_livecomments_handler(
 
     let mut livecomments = Vec::with_capacity(livecomment_models.len());
     for livecomment_model in livecomment_models {
-        let livecomment =
-            fill_livecomment_response(&mut tx, livecomment_model, &user_cache, &tags_cache).await?;
+        let livecomment = fill_livecomment_response(
+            &mut tx,
+            livecomment_model,
+            &user_cache,
+            &tags_cache,
+            &livestream_cache,
+        )
+        .await?;
         livecomments.push(livecomment);
     }
 
@@ -1085,6 +1120,7 @@ async fn post_livecomment_handler(
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -1103,10 +1139,8 @@ async fn post_livecomment_handler(
     let mut tx = pool.begin().await?;
 
     let livestream_model: LivestreamModel =
-        sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-            .bind(livestream_id)
-            .fetch_optional(&mut *tx)
-            .await?
+        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
+            .await
             .ok_or(Error::NotFound("livestream not found".into()))?;
 
     // スパム判定
@@ -1164,6 +1198,7 @@ async fn post_livecomment_handler(
         },
         &user_cache,
         &tags_cache,
+        &livestream_cache,
     )
     .await?;
 
@@ -1177,6 +1212,7 @@ async fn report_livecomment_handler(
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -1193,11 +1229,10 @@ async fn report_livecomment_handler(
 
     let mut tx = pool.begin().await?;
 
-    let _: LivestreamModel = sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-        .bind(livestream_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(Error::NotFound("livestream not found".into()))?;
+    let _: LivestreamModel =
+        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
+            .await
+            .ok_or(Error::NotFound("livestream not found".into()))?;
 
     let _: LivecommentModel = sqlx::query_as("SELECT * FROM livecomments WHERE id = ?")
         .bind(livecomment_id)
@@ -1228,6 +1263,7 @@ async fn report_livecomment_handler(
         },
         &user_cache,
         &tags_cache,
+        &livestream_cache,
     )
     .await?;
 
@@ -1243,7 +1279,11 @@ struct ModerateResponse {
 
 // NGワードを登録
 async fn moderate_handler(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState {
+        pool,
+        user_id_to_livestreams_cache,
+        ..
+    }): State<AppState>,
     jar: SignedCookieJar,
     Path((livestream_id,)): Path<(i64,)>,
     axum::Json(req): axum::Json<ModerateRequest>,
@@ -1260,17 +1300,14 @@ async fn moderate_handler(
     let mut tx = pool.begin().await?;
 
     // 配信者自身の配信に対するmoderateなのかを検証
-    let owned_livestreams: Vec<LivestreamModel> =
-        sqlx::query_as("SELECT * FROM livestreams WHERE id = ? AND user_id = ?")
-            .bind(livestream_id)
-            .bind(user_id)
-            .fetch_all(&mut *tx)
-            .await?;
-    if owned_livestreams.is_empty() {
-        return Err(Error::BadRequest(
-            "A streamer can't moderate livestreams that other streamers own".into(),
-        ));
-    }
+    let _: LivestreamModel =
+        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user_id)
+            .await
+            .into_iter()
+            .find(|model| model.id == livestream_id)
+            .ok_or(Error::BadRequest(
+                "A streamer can't moderate livestreams that other streamers own".into(),
+            ))?;
 
     let created_at = Utc::now().timestamp();
     let rs = sqlx::query(
@@ -1302,14 +1339,14 @@ async fn fill_livecomment_response(
     livecomment_model: LivecommentModel,
     user_cache: &UserCache,
     tags_cache: &TagsCache,
+    livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<Livecomment> {
     let comment_owner = get_user_or_insert(tx, livecomment_model.user_id, user_cache).await;
 
     let livestream_model: LivestreamModel =
-        sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-            .bind(livecomment_model.livestream_id)
-            .fetch_one(&mut *tx)
-            .await?;
+        get_livestream_model_or_insert(tx, livestream_cache, livecomment_model.livestream_id)
+            .await
+            .ok_or(sqlx::Error::RowNotFound)?;
     let livestream =
         fill_livestream_response(&mut *tx, livestream_model, user_cache, tags_cache).await?;
 
@@ -1328,6 +1365,7 @@ async fn fill_livecomment_report_response(
     report_model: LivecommentReportModel,
     user_cache: &UserCache,
     tags_cache: &TagsCache,
+    livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<LivecommentReport> {
     let reporter = get_user_or_insert(tx, report_model.user_id, user_cache).await;
 
@@ -1336,8 +1374,14 @@ async fn fill_livecomment_report_response(
             .bind(report_model.livecomment_id)
             .fetch_one(&mut *tx)
             .await?;
-    let livecomment =
-        fill_livecomment_response(&mut *tx, livecomment_model, user_cache, tags_cache).await?;
+    let livecomment = fill_livecomment_response(
+        &mut *tx,
+        livecomment_model,
+        user_cache,
+        tags_cache,
+        livestream_cache,
+    )
+    .await?;
 
     Ok(LivecommentReport {
         id: report_model.id,
@@ -1381,6 +1425,7 @@ async fn get_reactions_handler(
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -1405,8 +1450,14 @@ async fn get_reactions_handler(
 
     let mut reactions = Vec::with_capacity(reaction_models.len());
     for reaction_model in reaction_models {
-        let reaction =
-            fill_reaction_response(&mut tx, reaction_model, &user_cache, &tags_cache).await?;
+        let reaction = fill_reaction_response(
+            &mut tx,
+            reaction_model,
+            &user_cache,
+            &tags_cache,
+            &livestream_cache,
+        )
+        .await?;
         reactions.push(reaction);
     }
 
@@ -1420,6 +1471,7 @@ async fn post_reaction_handler(
         pool,
         user_cache,
         tags_cache,
+        livestream_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -1459,6 +1511,7 @@ async fn post_reaction_handler(
         },
         &user_cache,
         &tags_cache,
+        &livestream_cache,
     )
     .await?;
 
@@ -1472,6 +1525,7 @@ async fn fill_reaction_response(
     reaction_model: ReactionModel,
     user_cache: &UserCache,
     tags_cache: &TagsCache,
+    livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<Reaction> {
     let user_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
         .bind(reaction_model.user_id)
@@ -1480,10 +1534,9 @@ async fn fill_reaction_response(
     let user = fill_user_response(&mut *tx, user_model).await?;
 
     let livestream_model: LivestreamModel =
-        sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-            .bind(reaction_model.livestream_id)
-            .fetch_one(&mut *tx)
-            .await?;
+        get_livestream_model_or_insert(tx, livestream_cache, reaction_model.livestream_id)
+            .await
+            .ok_or(sqlx::Error::RowNotFound)?;
     let livestream =
         fill_livestream_response(&mut *tx, livestream_model, user_cache, tags_cache).await?;
 
