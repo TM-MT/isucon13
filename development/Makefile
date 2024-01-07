@@ -25,6 +25,9 @@ top:
 logs:
 	$(DOCKER_COMPOSE) logs -f
 
+less-logs:
+	$(DOCKER_COMPOSE) logs | less -r
+
 # データベースの中身を確認する
 .PHONY: exec-mysql
 exec-mysql:
