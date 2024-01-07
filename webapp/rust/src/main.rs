@@ -881,22 +881,26 @@ async fn fill_tags_for_livestreams(
     tx: &mut MySqlConnection,
     livestream_models: &Vec<LivestreamModel>,
 ) -> sqlx::Result<HashMap<i64, Vec<Tag>>> {
-    let mut query_builder = QueryBuilder::new(
-        r#"
+    let models: Vec<TagModelWithLivestreamId> = if livestream_models.is_empty() {
+        Vec::new()
+    } else {
+        let mut query_builder = QueryBuilder::new(
+            r#"
         SELECT lt.livestream_id, t.*
         FROM tags t
         LEFT JOIN livestream_tags lt ON t.id=lt.tag_id
         WHERE livestream_id IN ("#,
-    );
+        );
 
-    let mut separated = query_builder.separated(", ");
-    for livestream_model in livestream_models {
-        separated.push_bind(livestream_model.id);
-    }
-    separated.push_unseparated(") ");
+        let mut separated = query_builder.separated(", ");
+        for livestream_model in livestream_models {
+            separated.push_bind(livestream_model.id);
+        }
+        separated.push_unseparated(") ");
 
-    let models: Vec<TagModelWithLivestreamId> =
-        query_builder.build_query_as().fetch_all(&mut *tx).await?;
+        query_builder.build_query_as().fetch_all(&mut *tx).await?
+    };
+
     let mut map = HashMap::new();
     models.into_iter().for_each(|m| {
         map.entry(m.livestream_id)
