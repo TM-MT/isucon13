@@ -99,7 +99,7 @@ where
 
 #[derive(Clone)]
 struct UserCache {
-    cache: Cache<i64, User>,
+    cache: Cache<i64, Option<User>>,
 }
 
 impl UserCache {
@@ -111,18 +111,22 @@ impl UserCache {
 }
 
 #[async_trait]
-impl MySqlResultCache<i64, User> for UserCache {
-    fn get_cache(&self) -> &Cache<i64, User> {
+impl MySqlResultCache<i64, Option<User>> for UserCache {
+    fn get_cache(&self) -> &Cache<i64, Option<User>> {
         &self.cache
     }
-    async fn get(&self, tx: &mut MySqlConnection, user_id: i64) -> User {
-        let user_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+    async fn get(&self, tx: &mut MySqlConnection, user_id: i64) -> Option<User> {
+        let res: Option<UserModel> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
             .bind(user_id)
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
             .unwrap();
 
-        fill_user_response(&mut *tx, user_model).await.unwrap()
+        if let Some(user_model) = res {
+            Some(fill_user_response(&mut *tx, user_model).await.unwrap())
+        } else {
+            None
+        }
     }
 }
 
@@ -1011,7 +1015,10 @@ async fn fill_livestream_responses(
     let mut res = Vec::with_capacity(livestream_models.len());
 
     for model in livestream_models.into_iter() {
-        let owner = user_cache.get_or_insert(tx, model.user_id).await;
+        let owner = user_cache
+            .get_or_insert(tx, model.user_id)
+            .await
+            .ok_or(sqlx::Error::RowNotFound)?;
         let tags: Vec<Tag> = tag_map.get(&model.id).unwrap_or(&Vec::new()).to_vec();
         res.push(Livestream::from((model, tags, owner)));
     }
@@ -1024,7 +1031,10 @@ async fn fill_livestream_response(
     user_cache: &UserCache,
     tags_cache: &TagsCache,
 ) -> sqlx::Result<Livestream> {
-    let owner = user_cache.get_or_insert(tx, livestream_model.user_id).await;
+    let owner = user_cache
+        .get_or_insert(tx, livestream_model.user_id)
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
     let tags = tags_cache.get_or_insert(tx, livestream_model.id).await;
 
     Ok(Livestream::from((livestream_model, tags, owner)))
@@ -1398,7 +1408,8 @@ async fn fill_livecomment_response(
 ) -> sqlx::Result<Livecomment> {
     let comment_owner = user_cache
         .get_or_insert(tx, livecomment_model.user_id)
-        .await;
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
 
     let livestream_model: LivestreamModel = livestream_cache
         .get_or_insert(tx, livecomment_model.livestream_id)
@@ -1424,7 +1435,10 @@ async fn fill_livecomment_report_response(
     tags_cache: &TagsCache,
     livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<LivecommentReport> {
-    let reporter = user_cache.get_or_insert(tx, report_model.user_id).await;
+    let reporter = user_cache
+        .get_or_insert(tx, report_model.user_id)
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
 
     let livecomment_model: LivecommentModel =
         sqlx::query_as("SELECT * FROM livecomments WHERE id = ?")
@@ -1584,11 +1598,10 @@ async fn fill_reaction_response(
     tags_cache: &TagsCache,
     livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<Reaction> {
-    let user_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(reaction_model.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let user = fill_user_response(&mut *tx, user_model).await?;
+    let user = user_cache
+        .get_or_insert(&mut *tx, reaction_model.user_id)
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
 
     let livestream_model: LivestreamModel = livestream_cache
         .get_or_insert(tx, reaction_model.livestream_id)
@@ -1739,7 +1752,9 @@ async fn post_icon_handler(
 }
 
 async fn get_me_handler(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState {
+        pool, user_cache, ..
+    }): State<AppState>,
     jar: SignedCookieJar,
 ) -> Result<axum::Json<User>, Error> {
     verify_user_session(&jar).await?;
@@ -1753,15 +1768,10 @@ async fn get_me_handler(
 
     let mut tx = pool.begin().await?;
 
-    let user_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(Error::NotFound(
-            "not found user that has the userid in session".into(),
-        ))?;
-
-    let user = fill_user_response(&mut tx, user_model).await?;
+    let user = user_cache
+        .get_or_insert(&mut *tx, user_id)
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
 
     tx.commit().await?;
 
@@ -1868,7 +1878,9 @@ async fn login_handler(
 // ユーザ詳細API
 // GET /api/user/:username
 async fn get_user_handler(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState {
+        pool, user_cache, ..
+    }): State<AppState>,
     jar: SignedCookieJar,
     Path((username,)): Path<(String,)>,
 ) -> Result<axum::Json<User>, Error> {
@@ -1884,7 +1896,10 @@ async fn get_user_handler(
             "not found user that has the given username".into(),
         ))?;
 
-    let user = fill_user_response(&mut tx, user_model).await?;
+    let user = user_cache
+        .get_or_insert(&mut *tx, user_model.id)
+        .await
+        .unwrap();
 
     tx.commit().await?;
 
