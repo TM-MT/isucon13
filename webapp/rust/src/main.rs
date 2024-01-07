@@ -746,21 +746,22 @@ async fn exit_livestream_handler(
 async fn get_livestream_model(
     tx: &mut MySqlConnection,
     livestream_id: i64,
-) -> sqlx::Result<Option<LivestreamModel>> {
-    Ok(sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
+) -> Option<LivestreamModel> {
+    sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
         .bind(livestream_id)
         .fetch_optional(&mut *tx)
-        .await?)
+        .await
+        .unwrap()
 }
+
 async fn get_livestream_model_or_insert(
     tx: &mut MySqlConnection,
     livestream_cache: &LivestreamCache,
     livestream_id: i64,
 ) -> Option<LivestreamModel> {
     livestream_cache
-        .try_get_with(livestream_id, get_livestream_model(tx, livestream_id))
+        .get_with(livestream_id, get_livestream_model(tx, livestream_id))
         .await
-        .unwrap()
 }
 
 async fn get_livestream_handler(
