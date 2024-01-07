@@ -8,7 +8,7 @@ $TTL 3600
 )
 
 @        60 IN NS ns1.u.isucon.dev.
-@        60 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
-ns1      60 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
-pipe     60 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
-*        60 IN A  <ISUCON_SUBDOMAIN_ADDRESS>
+@        60 IN A  127.0.0.1
+ns1      60 IN A  127.0.0.1
+pipe     60 IN A  127.0.0.1
+*        60 IN A  127.0.0.1

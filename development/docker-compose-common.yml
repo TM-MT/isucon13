@@ -26,7 +26,6 @@ services:
     volumes:
       - ./etc/my.cnf:/etc/my.cnf
       - ../webapp/sql/initdb.d:/docker-entrypoint-initdb.d
-      - ./pdns/20_powerdns_schema.sql:/docker-entrypoint-initdb.d/20_powerdns_schema.sql
       - mysql_volume:/var/lib/mysql
       - ../webapp/logs/mysql:/var/log/mysql
     ports:
@@ -60,10 +59,9 @@ services:
       # https://github.com/PowerDNS/pdns/blob/8cbe7d8e3c44f87b986a6f88cda98c3a0d943026/dockerdata/pdns.conf#L3
       - ../provisioning/ansible/roles/powerdns/files/pdns.conf:/etc/powerdns/pdns.conf:ro
       - ../provisioning/ansible/roles/powerdns/files/pdns.d/docker.conf:/etc/powerdns/pdns.d/docker.conf:ro
+      - ../webapp/pdns/named.conf:/etc/powerdns/named.conf
+      - ../webapp/pdns/u.isucon.dev.zone:/var/lib/powerdns/zones/u.isucon.dev.zone
     restart: always
-    depends_on:
-      mysql:
-        condition: service_healthy
     deploy:
       resources:
         limits:

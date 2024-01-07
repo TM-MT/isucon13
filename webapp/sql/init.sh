@@ -74,7 +74,5 @@ mysql -u root -proot isupipe  \
 		--port "$ISUCON_DB_PORT" \
 		-e "${QUERY}"
 
-bash ../pdns/init_zone.sh 
-
 find /home/isucon/webapp/public/icons -type f ! -name 'NoImage*' -exec rm {} +
 
