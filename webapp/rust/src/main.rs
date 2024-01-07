@@ -126,10 +126,22 @@ fn build_mysql_options() -> sqlx::mysql::MySqlConnectOptions {
     options
 }
 
-async fn initialize_handler() -> Result<axum::Json<InitializeResponse>, Error> {
+async fn initialize_handler(
+    State(AppState {
+        user_cache,
+        tags_cache,
+        user_id_to_livestreams_cache,
+        ..
+    }): State<AppState>,
+) -> Result<axum::Json<InitializeResponse>, Error> {
     let output = tokio::process::Command::new("../sql/init.sh")
         .output()
         .await?;
+
+    user_cache.invalidate_all();
+    tags_cache.invalidate_all();
+    user_id_to_livestreams_cache.invalidate_all();
+
     if !output.status.success() {
         return Err(Error::InternalServerError(format!(
             "init.sh failed with stdout={} stderr={}",
