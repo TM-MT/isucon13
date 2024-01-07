@@ -19,17 +19,34 @@ bench:
 	:> $(LOG_FILE_NGINX)
 	:> $(LOG_ERROR_FILE_NGINX)
 	:> $(LOG_FILE_MYSQL)
-	cd development && make restart && make truncate-mysql && cd ../
+	cd development && make build && make restart && make truncate-mysql && cd ../
 	sleep 3
-	cd bench && make bench && cd ../
+	cd bench && make bench
 	cd development && make analyze-mysql
 	make analyze-nginx-log
+	make analyze-mysql-log
+
+# Restart servers and run pretest
+.PHONY: pretest
+pretest:
+	:> $(LOG_FILE_NGINX)
+	:> $(LOG_ERROR_FILE_NGINX)
+	:> $(LOG_FILE_MYSQL)
+	cd development && make build && make restart && make truncate-mysql && cd ../
+	sleep 3
+	cd bench && make pretest
 
 ## Monitors
 # Show servers log
 .PHONY: logs
 logs:
-	cd development && make logs
+	cd development && make less-logs
+
+## Debug
+# get into mysql
+.PHONY: exec-mysql
+exec-mysql:
+	cd development && make exec-mysql
 
 ## ログの解析
 # nginxのログ解析
@@ -38,10 +55,17 @@ analyze-nginx-log:
 	cat $(LOG_FILE_NGINX) | \
 		alp json \
 			-o count,method,uri,min,avg,max,sum \
-			--limit 100000 \
 			--sort=sum -r \
 			--matching-groups='/api/livestream/\d{4}/moderate$$,/api/livestream/\d{4}/statistics$$,/api/livestream/\d{4}/report$$,/api/livestream/\d{4}/ngwords$$,/api/livestream/\d{4}/exit$$,/api/livestream/\d{4}/enter$$,/api/livestream/\d{4}/livecomment$$,/api/livestream/\d{4}/livecomment/\d{4}/report$$,/api/livestream/\d{4}/reaction$$,/api/user/.*/statistics$$,/api/user/.*/icon$$,/api/user/.*/livestream$$,/api/user/.*/theme$$' \
 			> webapp/logs/nginx/collected
+
+.PHONY: analyze-mysql-log
+analyze-mysql-log:
+	docker pull matsuu/pt-query-digest
+	cat $(LOG_FILE_MYSQL) | \
+		docker run --rm -i matsuu/pt-query-digest \
+			--group-by fingerprint \
+		> webapp/logs/mysql/collected
 
 .PHONY: help
 help:
