@@ -22,9 +22,11 @@ restart:
 top:
 	$(DOCKER_COMPOSE) top
 
+.PHONY: logs
 logs:
 	$(DOCKER_COMPOSE) logs -f
 
+.PHONY: less-logs
 less-logs:
 	$(DOCKER_COMPOSE) logs | less -r
 
