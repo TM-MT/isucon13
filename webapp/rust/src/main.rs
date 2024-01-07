@@ -1,14 +1,16 @@
-use async_session::{CookieStore, SessionStore};
+use async_session::{async_trait, CookieStore, SessionStore};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum_extra::extract::cookie::SignedCookieJar;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use core::hash::Hash;
 use moka::future::Cache;
 use sha2::Digest;
 use sqlx::mysql::{MySqlConnection, MySqlPool};
 use sqlx::prelude::FromRow;
 use sqlx::QueryBuilder;
 use std::borrow::Cow;
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -73,12 +75,155 @@ impl axum::response::IntoResponse for Error {
             .into_response()
     }
 }
-type UserCache = Cache<i64, User>;
-/// livestream id to tags
-type TagsCache = Cache<i64, Vec<Tag>>;
-type UserIdToLivestreamsCache = Cache<i64, Vec<LivestreamModel>>;
-/// livestream id to model
-type LivestreamCache = Cache<i64, Option<LivestreamModel>>;
+
+#[async_trait]
+trait MySqlResultCache<K, V>
+where
+    K: Hash + Eq + Send + Sync + Clone + 'static,
+    V: Send + Sync + Clone + 'static,
+{
+    fn get_cache(&self) -> &Cache<K, V, RandomState>;
+    async fn get(&self, tx: &mut MySqlConnection, key: K) -> V;
+    async fn get_or_insert(&self, tx: &mut MySqlConnection, key: K) -> V {
+        self.get_cache()
+            .get_with(key.clone(), self.get(tx, key.clone()))
+            .await
+    }
+    async fn invalidate(&self, key: &K) {
+        self.get_cache().invalidate(key).await;
+    }
+    fn invalidate_all(&self) {
+        self.get_cache().invalidate_all();
+    }
+}
+
+#[derive(Clone)]
+struct UserCache {
+    cache: Cache<i64, User>,
+}
+
+impl UserCache {
+    fn new() -> Self {
+        Self {
+            cache: Cache::new(1000),
+        }
+    }
+}
+
+#[async_trait]
+impl MySqlResultCache<i64, User> for UserCache {
+    fn get_cache(&self) -> &Cache<i64, User> {
+        &self.cache
+    }
+    async fn get(&self, tx: &mut MySqlConnection, user_id: i64) -> User {
+        let user_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+
+        fill_user_response(&mut *tx, user_model).await.unwrap()
+    }
+}
+
+#[derive(Clone)]
+struct TagsCache {
+    /// livestream id to tags
+    cache: Cache<i64, Vec<Tag>>,
+}
+
+impl TagsCache {
+    fn new() -> Self {
+        Self {
+            cache: Cache::new(1000),
+        }
+    }
+}
+
+#[async_trait]
+impl MySqlResultCache<i64, Vec<Tag>> for TagsCache {
+    fn get_cache(&self) -> &Cache<i64, Vec<Tag>> {
+        &self.cache
+    }
+
+    async fn get(&self, tx: &mut MySqlConnection, livestream_id: i64) -> Vec<Tag> {
+        let query = r#"
+            SELECT t.*
+            FROM tags t
+            LEFT JOIN livestream_tags lt ON t.id=lt.tag_id
+            WHERE livestream_id=?
+            "#;
+        let tag_models: Vec<TagModel> = sqlx::query_as(query)
+            .bind(livestream_id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+
+        tag_models
+            .into_iter()
+            .map(|tag_model| Tag {
+                id: tag_model.id,
+                name: tag_model.name,
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone)]
+struct UserIdToLivestreamsCache {
+    /// user id to models
+    cache: Cache<i64, Vec<LivestreamModel>>,
+}
+
+impl UserIdToLivestreamsCache {
+    fn new() -> Self {
+        Self {
+            cache: Cache::new(1000),
+        }
+    }
+}
+
+#[async_trait]
+impl MySqlResultCache<i64, Vec<LivestreamModel>> for UserIdToLivestreamsCache {
+    fn get_cache(&self) -> &Cache<i64, Vec<LivestreamModel>> {
+        &self.cache
+    }
+    async fn get(&self, tx: &mut MySqlConnection, user_id: i64) -> Vec<LivestreamModel> {
+        sqlx::query_as("SELECT * FROM livestreams WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap()
+    }
+}
+
+#[derive(Clone)]
+struct LivestreamCache {
+    /// livestream id to model
+    cache: Cache<i64, Option<LivestreamModel>>,
+}
+
+impl LivestreamCache {
+    fn new() -> Self {
+        Self {
+            cache: Cache::new(1000),
+        }
+    }
+}
+
+#[async_trait]
+impl MySqlResultCache<i64, Option<LivestreamModel>> for LivestreamCache {
+    fn get_cache(&self) -> &Cache<i64, Option<LivestreamModel>> {
+        &self.cache
+    }
+    async fn get(&self, tx: &mut MySqlConnection, livestream_id: i64) -> Option<LivestreamModel> {
+        sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
+            .bind(livestream_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .unwrap()
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -270,10 +415,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(AppState {
             pool,
             key: axum_extra::extract::cookie::Key::derive_from(&secret),
-            user_cache: Cache::new(1000),
-            tags_cache: Cache::new(1000),
-            user_id_to_livestreams_cache: Cache::new(1000),
-            livestream_cache: Cache::new(1000),
+            user_cache: UserCache::new(),
+            tags_cache: TagsCache::new(),
+            user_id_to_livestreams_cache: UserIdToLivestreamsCache::new(),
+            livestream_cache: LivestreamCache::new(),
         })
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -603,30 +748,6 @@ async fn search_livestreams_handler(
     Ok(axum::Json(livestreams))
 }
 
-async fn get_livestream_models(
-    tx: &mut MySqlConnection,
-    user_id: i64,
-) -> sqlx::Result<Vec<LivestreamModel>> {
-    Ok(
-        sqlx::query_as("SELECT * FROM livestreams WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_all(&mut *tx)
-            .await?,
-    )
-}
-
-async fn get_livestream_models_or_insert(
-    tx: &mut MySqlConnection,
-    user_id_to_livestreams_cache: &UserIdToLivestreamsCache,
-    user_id: i64,
-) -> Vec<LivestreamModel> {
-    user_id_to_livestreams_cache
-        .try_get_with(user_id, get_livestream_models(tx, user_id))
-        .await
-        .unwrap()
-        .clone()
-}
-
 async fn get_my_livestreams_handler(
     State(AppState {
         pool,
@@ -646,8 +767,9 @@ async fn get_my_livestreams_handler(
     let user_id: i64 = sess.get(DEFAULT_USER_ID_KEY).ok_or(Error::SessionError)?;
 
     let mut tx = pool.begin().await?;
-    let livestream_models =
-        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user_id).await;
+    let livestream_models = user_id_to_livestreams_cache
+        .get_or_insert(&mut tx, user_id)
+        .await;
     let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
@@ -675,8 +797,9 @@ async fn get_user_livestreams_handler(
         .await?
         .ok_or(Error::NotFound("user not found".into()))?;
 
-    let livestream_models: Vec<LivestreamModel> =
-        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user.id).await;
+    let livestream_models: Vec<LivestreamModel> = user_id_to_livestreams_cache
+        .get_or_insert(&mut tx, user.id)
+        .await;
     let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
@@ -743,27 +866,6 @@ async fn exit_livestream_handler(
     Ok(())
 }
 
-async fn get_livestream_model(
-    tx: &mut MySqlConnection,
-    livestream_id: i64,
-) -> Option<LivestreamModel> {
-    sqlx::query_as("SELECT * FROM livestreams WHERE id = ?")
-        .bind(livestream_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .unwrap()
-}
-
-async fn get_livestream_model_or_insert(
-    tx: &mut MySqlConnection,
-    livestream_cache: &LivestreamCache,
-    livestream_id: i64,
-) -> Option<LivestreamModel> {
-    livestream_cache
-        .get_with(livestream_id, get_livestream_model(tx, livestream_id))
-        .await
-}
-
 async fn get_livestream_handler(
     State(AppState {
         pool,
@@ -779,12 +881,12 @@ async fn get_livestream_handler(
 
     let mut tx = pool.begin().await?;
 
-    let livestream_model: LivestreamModel =
-        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
-            .await
-            .ok_or(Error::NotFound(
-                "not found livestream that has the given id".into(),
-            ))?;
+    let livestream_model: LivestreamModel = livestream_cache
+        .get_or_insert(&mut tx, livestream_id)
+        .await
+        .ok_or(Error::NotFound(
+            "not found livestream that has the given id".into(),
+        ))?;
 
     let livestream =
         fill_livestream_response(&mut tx, livestream_model, &user_cache, &tags_cache).await?;
@@ -816,10 +918,10 @@ async fn get_livecomment_reports_handler(
 
     let mut tx = pool.begin().await?;
 
-    let livestream_model: LivestreamModel =
-        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
-            .await
-            .ok_or(Error::Sqlx(sqlx::Error::RowNotFound))?;
+    let livestream_model: LivestreamModel = livestream_cache
+        .get_or_insert(&mut tx, livestream_id)
+        .await
+        .ok_or(Error::Sqlx(sqlx::Error::RowNotFound))?;
 
     if livestream_model.user_id != user_id {
         return Err(Error::Forbidden(
@@ -849,26 +951,6 @@ async fn get_livecomment_reports_handler(
     tx.commit().await?;
 
     Ok(axum::Json(reports))
-}
-
-async fn fill_user_response_from(tx: &mut MySqlConnection, user_id: i64) -> sqlx::Result<User> {
-    let owner_model: UserModel = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    fill_user_response(tx, owner_model).await
-}
-
-async fn get_user_or_insert(
-    tx: &mut MySqlConnection,
-    user_id: i64,
-    user_cache: &UserCache,
-) -> User {
-    user_cache
-        .try_get_with(user_id, fill_user_response_from(tx, user_id))
-        .await
-        .unwrap()
 }
 
 #[derive(FromRow)]
@@ -929,43 +1011,11 @@ async fn fill_livestream_responses(
     let mut res = Vec::with_capacity(livestream_models.len());
 
     for model in livestream_models.into_iter() {
-        let owner = get_user_or_insert(tx, model.user_id, user_cache).await;
+        let owner = user_cache.get_or_insert(tx, model.user_id).await;
         let tags: Vec<Tag> = tag_map.get(&model.id).unwrap_or(&Vec::new()).to_vec();
         res.push(Livestream::from((model, tags, owner)));
     }
     Ok(res)
-}
-
-async fn get_tags_or_insert(
-    tx: &mut MySqlConnection,
-    livestream_id: i64,
-    tags_cache: &TagsCache,
-) -> Vec<Tag> {
-    tags_cache
-        .try_get_with(livestream_id, fill_tags(tx, livestream_id))
-        .await
-        .unwrap()
-}
-
-async fn fill_tags(tx: &mut MySqlConnection, livestream_id: i64) -> sqlx::Result<Vec<Tag>> {
-    let query = r#"
-    SELECT t.*
-    FROM tags t
-    LEFT JOIN livestream_tags lt ON t.id=lt.tag_id
-    WHERE livestream_id=?
-    "#;
-    let tag_models: Vec<TagModel> = sqlx::query_as(query)
-        .bind(livestream_id)
-        .fetch_all(&mut *tx)
-        .await?;
-
-    Ok(tag_models
-        .into_iter()
-        .map(|tag_model| Tag {
-            id: tag_model.id,
-            name: tag_model.name,
-        })
-        .collect())
 }
 
 async fn fill_livestream_response(
@@ -974,8 +1024,8 @@ async fn fill_livestream_response(
     user_cache: &UserCache,
     tags_cache: &TagsCache,
 ) -> sqlx::Result<Livestream> {
-    let owner = get_user_or_insert(tx, livestream_model.user_id, user_cache).await;
-    let tags = get_tags_or_insert(tx, livestream_model.id, tags_cache).await;
+    let owner = user_cache.get_or_insert(tx, livestream_model.user_id).await;
+    let tags = tags_cache.get_or_insert(tx, livestream_model.id).await;
 
     Ok(Livestream::from((livestream_model, tags, owner)))
 }
@@ -1143,10 +1193,10 @@ async fn post_livecomment_handler(
 
     let mut tx = pool.begin().await?;
 
-    let livestream_model: LivestreamModel =
-        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
-            .await
-            .ok_or(Error::NotFound("livestream not found".into()))?;
+    let livestream_model: LivestreamModel = livestream_cache
+        .get_or_insert(&mut tx, livestream_id)
+        .await
+        .ok_or(Error::NotFound("livestream not found".into()))?;
 
     // スパム判定
     let ngwords: Vec<NgWord> =
@@ -1234,10 +1284,10 @@ async fn report_livecomment_handler(
 
     let mut tx = pool.begin().await?;
 
-    let _: LivestreamModel =
-        get_livestream_model_or_insert(&mut tx, &livestream_cache, livestream_id)
-            .await
-            .ok_or(Error::NotFound("livestream not found".into()))?;
+    let _: LivestreamModel = livestream_cache
+        .get_or_insert(&mut tx, livestream_id)
+        .await
+        .ok_or(Error::NotFound("livestream not found".into()))?;
 
     let _: LivecommentModel = sqlx::query_as("SELECT * FROM livecomments WHERE id = ?")
         .bind(livecomment_id)
@@ -1305,14 +1355,14 @@ async fn moderate_handler(
     let mut tx = pool.begin().await?;
 
     // 配信者自身の配信に対するmoderateなのかを検証
-    let _: LivestreamModel =
-        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user_id)
-            .await
-            .into_iter()
-            .find(|model| model.id == livestream_id)
-            .ok_or(Error::BadRequest(
-                "A streamer can't moderate livestreams that other streamers own".into(),
-            ))?;
+    let _: LivestreamModel = user_id_to_livestreams_cache
+        .get_or_insert(&mut tx, user_id)
+        .await
+        .into_iter()
+        .find(|model| model.id == livestream_id)
+        .ok_or(Error::BadRequest(
+            "A streamer can't moderate livestreams that other streamers own".into(),
+        ))?;
 
     let created_at = Utc::now().timestamp();
     let rs = sqlx::query(
@@ -1346,12 +1396,14 @@ async fn fill_livecomment_response(
     tags_cache: &TagsCache,
     livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<Livecomment> {
-    let comment_owner = get_user_or_insert(tx, livecomment_model.user_id, user_cache).await;
+    let comment_owner = user_cache
+        .get_or_insert(tx, livecomment_model.user_id)
+        .await;
 
-    let livestream_model: LivestreamModel =
-        get_livestream_model_or_insert(tx, livestream_cache, livecomment_model.livestream_id)
-            .await
-            .ok_or(sqlx::Error::RowNotFound)?;
+    let livestream_model: LivestreamModel = livestream_cache
+        .get_or_insert(tx, livecomment_model.livestream_id)
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
     let livestream =
         fill_livestream_response(&mut *tx, livestream_model, user_cache, tags_cache).await?;
 
@@ -1372,7 +1424,7 @@ async fn fill_livecomment_report_response(
     tags_cache: &TagsCache,
     livestream_cache: &LivestreamCache,
 ) -> sqlx::Result<LivecommentReport> {
-    let reporter = get_user_or_insert(tx, report_model.user_id, user_cache).await;
+    let reporter = user_cache.get_or_insert(tx, report_model.user_id).await;
 
     let livecomment_model: LivecommentModel =
         sqlx::query_as("SELECT * FROM livecomments WHERE id = ?")
@@ -1538,10 +1590,10 @@ async fn fill_reaction_response(
         .await?;
     let user = fill_user_response(&mut *tx, user_model).await?;
 
-    let livestream_model: LivestreamModel =
-        get_livestream_model_or_insert(tx, livestream_cache, reaction_model.livestream_id)
-            .await
-            .ok_or(sqlx::Error::RowNotFound)?;
+    let livestream_model: LivestreamModel = livestream_cache
+        .get_or_insert(tx, reaction_model.livestream_id)
+        .await
+        .ok_or(sqlx::Error::RowNotFound)?;
     let livestream =
         fill_livestream_response(&mut *tx, livestream_model, user_cache, tags_cache).await?;
 
@@ -2010,8 +2062,9 @@ async fn get_user_statistics_handler(
     // ライブコメント数、チップ合計
     let mut total_livecomments = 0;
     let mut total_tip = 0;
-    let livestreams: Vec<LivestreamModel> =
-        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user.id).await;
+    let livestreams: Vec<LivestreamModel> = user_id_to_livestreams_cache
+        .get_or_insert(&mut tx, user.id)
+        .await;
 
     for livestream in &livestreams {
         let livecomments: Vec<LivecommentModel> =
