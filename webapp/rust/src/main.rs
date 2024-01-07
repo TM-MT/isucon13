@@ -76,6 +76,7 @@ impl axum::response::IntoResponse for Error {
 type UserCache = Cache<i64, User>;
 /// livestream id to tags
 type TagsCache = Cache<i64, Vec<Tag>>;
+type UserIdToLivestreamsCache = Cache<i64, Vec<LivestreamModel>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -84,6 +85,7 @@ struct AppState {
     user_cache: UserCache,
     /// livestream id to tags
     tags_cache: TagsCache,
+    user_id_to_livestreams_cache: UserIdToLivestreamsCache,
 }
 impl axum::extract::FromRef<AppState> for axum_extra::extract::cookie::Key {
     fn from_ref(state: &AppState) -> Self {
@@ -255,6 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             key: axum_extra::extract::cookie::Key::derive_from(&secret),
             user_cache: Cache::new(1000),
             tags_cache: Cache::new(1000),
+            user_id_to_livestreams_cache: Cache::new(1000),
         })
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -343,7 +346,7 @@ struct ReserveLivestreamRequest {
     end_at: i64,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sqlx::FromRow, Clone)]
 struct LivestreamModel {
     id: i64,
     user_id: i64,
@@ -398,6 +401,7 @@ async fn reserve_livestream_handler(
         pool,
         user_cache,
         tags_cache,
+        user_id_to_livestreams_cache,
         ..
     }): State<AppState>,
     jar: SignedCookieJar,
@@ -494,6 +498,7 @@ async fn reserve_livestream_handler(
         .bind(req.end_at)
         .execute(&mut *tx)
         .await?;
+    user_id_to_livestreams_cache.invalidate(&user_id).await;
     let livestream_id = rs.last_insert_id() as i64;
 
     // タグ追加
@@ -582,9 +587,36 @@ async fn search_livestreams_handler(
     Ok(axum::Json(livestreams))
 }
 
+async fn get_livestream_models(
+    tx: &mut MySqlConnection,
+    user_id: i64,
+) -> sqlx::Result<Vec<LivestreamModel>> {
+    Ok(
+        sqlx::query_as("SELECT * FROM livestreams WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_all(&mut *tx)
+            .await?,
+    )
+}
+
+async fn get_livestream_models_or_insert(
+    tx: &mut MySqlConnection,
+    user_id_to_livestreams_cache: &UserIdToLivestreamsCache,
+    user_id: i64,
+) -> Vec<LivestreamModel> {
+    user_id_to_livestreams_cache
+        .try_get_with(user_id, get_livestream_models(tx, user_id))
+        .await
+        .unwrap()
+        .clone()
+}
+
 async fn get_my_livestreams_handler(
     State(AppState {
-        pool, user_cache, ..
+        pool,
+        user_cache,
+        user_id_to_livestreams_cache,
+        ..
     }): State<AppState>,
     jar: SignedCookieJar,
 ) -> Result<axum::Json<Vec<Livestream>>, Error> {
@@ -598,12 +630,8 @@ async fn get_my_livestreams_handler(
     let user_id: i64 = sess.get(DEFAULT_USER_ID_KEY).ok_or(Error::SessionError)?;
 
     let mut tx = pool.begin().await?;
-
-    let livestream_models: Vec<LivestreamModel> =
-        sqlx::query_as("SELECT * FROM livestreams WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let livestream_models =
+        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user_id).await;
     let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
@@ -613,7 +641,10 @@ async fn get_my_livestreams_handler(
 
 async fn get_user_livestreams_handler(
     State(AppState {
-        pool, user_cache, ..
+        pool,
+        user_cache,
+        user_id_to_livestreams_cache,
+        ..
     }): State<AppState>,
     jar: SignedCookieJar,
     Path((username,)): Path<(String,)>,
@@ -629,10 +660,7 @@ async fn get_user_livestreams_handler(
         .ok_or(Error::NotFound("user not found".into()))?;
 
     let livestream_models: Vec<LivestreamModel> =
-        sqlx::query_as("SELECT * FROM livestreams WHERE user_id = ?")
-            .bind(user.id)
-            .fetch_all(&mut *tx)
-            .await?;
+        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user.id).await;
     let livestreams = fill_livestream_responses(&mut tx, livestream_models, &user_cache).await?;
 
     tx.commit().await?;
@@ -1859,7 +1887,11 @@ impl From<MysqlDecimal> for i64 {
 }
 
 async fn get_user_statistics_handler(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState {
+        pool,
+        user_id_to_livestreams_cache,
+        ..
+    }): State<AppState>,
     jar: SignedCookieJar,
     Path((username,)): Path<(String,)>,
 ) -> Result<axum::Json<UserStatistics>, Error> {
@@ -1909,10 +1941,7 @@ async fn get_user_statistics_handler(
     let mut total_livecomments = 0;
     let mut total_tip = 0;
     let livestreams: Vec<LivestreamModel> =
-        sqlx::query_as("SELECT * FROM livestreams WHERE user_id = ?")
-            .bind(user.id)
-            .fetch_all(&mut *tx)
-            .await?;
+        get_livestream_models_or_insert(&mut tx, &user_id_to_livestreams_cache, user.id).await;
 
     for livestream in &livestreams {
         let livecomments: Vec<LivecommentModel> =
