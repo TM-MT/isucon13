@@ -2045,15 +2045,14 @@ async fn get_user_statistics_handler(
         .await?
         .ok_or(Error::BadRequest("".into()))?;
 
+    // window関数を使うため、 GROUP BY が必要
     let query = r"#
-    SELECT 
-        u.id AS user_id,
-        (SELECT COUNT(*) FROM users) + 1 - RANK() OVER (ORDER BY (COUNT(r.id) + IFNULL(SUM(l2.tip), 0)),u.name) AS user_rank
-    FROM users u
-    LEFT JOIN livestreams l ON l.user_id = u.id
-    LEFT JOIN reactions r ON r.livestream_id = l.id
-    LEFT JOIN livecomments l2 ON l2.livestream_id = l.id
-    GROUP BY u.id
+    SELECT
+        user_id AS user_id,
+        (SELECT COUNT(*) FROM users) + 1 - RANK() OVER (ORDER BY (total_reactions + total_tip),u.name) AS user_rank
+    FROM user_score
+    LEFT JOIN users u ON user_id=u.id
+    GROUP BY user_id
     #";
     let user_ranks: Vec<UserRankModel> = sqlx::query_as(query).fetch_all(&mut *tx).await?;
     let rank = user_ranks

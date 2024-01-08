@@ -102,3 +102,56 @@ CREATE TABLE `reactions` (
   `emoji_name` VARCHAR(255) NOT NULL,
   `created_at` BIGINT NOT NULL
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+-- ユーザごとに、紐づく配信について、累計リアクション数、累計ライブコメント数、累計売上金額を算出
+CREATE TABLE `user_score` (
+  `user_id` BIGINT NOT NULL,
+  `total_reactions` BIGINT NOT NULL DEFAULT 0, -- ユーザの配信の累計リアクション数
+  `total_tip` BIGINT NOT NULL DEFAULT 0, -- ユーザの配信の累計売上金額
+  UNIQUE `uniq_user_id` (`user_id`)
+) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+DELIMITER //
+-- insert default score
+DROP TRIGGER IF EXISTS user_socre_user_trigger //
+CREATE TRIGGER user_socre_user_trigger
+AFTER INSERT ON users FOR EACH ROW
+  INSERT INTO user_score (user_id) VALUES (NEW.id) //
+
+-- update user_score when new reaction is inserted
+DROP TRIGGER IF EXISTS user_score_reaction_trigger //
+CREATE TRIGGER user_score_reaction_trigger
+AFTER INSERT ON reactions FOR EACH ROW
+BEGIN
+  DECLARE uid, current_count BIGINT;
+
+  SELECT
+    `user_id`,`total_reactions` INTO uid,current_count
+  FROM user_score
+  WHERE user_id=(
+      SELECT l.user_id
+      FROM livestreams l
+      WHERE l.id=NEW.livestream_id
+    );
+
+  UPDATE user_score SET `total_reactions`=current_count+1 WHERE `user_id`=uid;
+END //
+
+DROP TRIGGER IF EXISTS user_score_livecomment_trigger //
+CREATE TRIGGER user_score_livecomment_trigger
+AFTER INSERT ON livecomments FOR EACH ROW
+BEGIN
+  DECLARE uid, current_count BIGINT;
+
+  SELECT
+      user_id,total_tip INTO uid,current_count
+  FROM user_score
+  WHERE user_id=(
+      SELECT user_id
+      FROM livestreams
+      WHERE id=NEW.livestream_id
+    );
+
+  UPDATE user_score SET total_tip=current_count+NEW.tip WHERE user_id=uid;
+END //
+DELIMITER ;
