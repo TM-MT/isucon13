@@ -99,10 +99,16 @@ $ make bench # to restart all system and clear metrics, and start bench
 
 ベンチ環境
 
+BEFORE score_20140
 ```
 Linux 5.19.0-43-generic
 Intel(R) Core(TM) i5-7200U CPU @ 2.50GHz
 Mem 8GB
+```
+
+AFTER
+```
+AWS EC2 c5.2xlarge (ベンチマーカーとアプリが共存)
 ```
 
 ## Links
