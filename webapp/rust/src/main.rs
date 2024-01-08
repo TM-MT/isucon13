@@ -1632,7 +1632,7 @@ struct UserModel {
 
 #[derive(Debug, sqlx::FromRow)]
 struct UserRankModel {
-    user_id: i64,
+    total_reactions: i64,
     user_rank: u64,
 }
 
@@ -2047,29 +2047,22 @@ async fn get_user_statistics_handler(
 
     // window関数を使うため、 GROUP BY が必要
     let query = r"#
-    SELECT
-        user_id AS user_id,
-        (SELECT COUNT(*) FROM users) + 1 - RANK() OVER (ORDER BY (total_reactions + total_tip),u.name) AS user_rank
-    FROM user_score
-    LEFT JOIN users u ON user_id=u.id
-    GROUP BY user_id
+    WITH t AS (
+        SELECT
+            user_id,
+            total_reactions,
+            (SELECT COUNT(*) FROM users) + 1 - RANK() OVER (ORDER BY (total_reactions + total_tip),u.name ASC) AS user_rank
+        FROM user_score
+        LEFT JOIN users u ON user_id=u.id
+        GROUP BY user_id
+    )
+    SELECT total_reactions, user_rank FROM t WHERE user_id=?;
     #";
-    let user_ranks: Vec<UserRankModel> = sqlx::query_as(query).fetch_all(&mut *tx).await?;
-    let rank = user_ranks
-        .into_iter()
-        .find(|ur| ur.user_id == user.id)
-        .unwrap()
-        .user_rank;
-
-    // リアクション数
-    let query = r"#
-    SELECT COUNT(*) FROM users u
-    INNER JOIN livestreams l ON l.user_id = u.id
-    INNER JOIN reactions r ON r.livestream_id = l.id
-    WHERE u.name = ?
-    #";
-    let MysqlDecimal(total_reactions) = sqlx::query_scalar(query)
-        .bind(&username)
+    let UserRankModel {
+        total_reactions,
+        user_rank,
+    } = sqlx::query_as(query)
+        .bind(user.id)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -2123,7 +2116,7 @@ async fn get_user_statistics_handler(
         .unwrap_or_default();
 
     Ok(axum::Json(UserStatistics {
-        rank: rank as i64,
+        rank: user_rank as i64,
         viewers_count,
         total_reactions,
         total_livecomments,
