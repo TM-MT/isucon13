@@ -1769,7 +1769,7 @@ async fn get_me_handler(
     let mut tx = pool.begin().await?;
 
     let user = user_cache
-        .get_or_insert(&mut *tx, user_id)
+        .get_or_insert(&mut tx, user_id)
         .await
         .ok_or(sqlx::Error::RowNotFound)?;
 
@@ -1897,7 +1897,7 @@ async fn get_user_handler(
         ))?;
 
     let user = user_cache
-        .get_or_insert(&mut *tx, user_model.id)
+        .get_or_insert(&mut tx, user_model.id)
         .await
         .unwrap();
 
