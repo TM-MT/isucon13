@@ -108,6 +108,7 @@ CREATE TABLE `user_score` (
   `user_id` BIGINT NOT NULL,
   `total_reactions` BIGINT NOT NULL DEFAULT 0, -- ユーザの配信の累計リアクション数
   `total_tip` BIGINT NOT NULL DEFAULT 0, -- ユーザの配信の累計売上金額
+  `total_livecomments` BIGINT NOT NULL DEFAULT 0, -- ユーザの配信への合計コメント数
   UNIQUE `uniq_user_id` (`user_id`)
 ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
@@ -141,10 +142,10 @@ DROP TRIGGER IF EXISTS user_score_livecomment_trigger //
 CREATE TRIGGER user_score_livecomment_trigger
 AFTER INSERT ON livecomments FOR EACH ROW
 BEGIN
-  DECLARE uid, current_count BIGINT;
+  DECLARE uid,current_tip,current_comments  BIGINT;
 
   SELECT
-      user_id,total_tip INTO uid,current_count
+      user_id,total_tip,total_livecomments INTO uid,current_tip,current_comments
   FROM user_score
   WHERE user_id=(
       SELECT user_id
@@ -152,6 +153,10 @@ BEGIN
       WHERE id=NEW.livestream_id
     );
 
-  UPDATE user_score SET total_tip=current_count+NEW.tip WHERE user_id=uid;
+  UPDATE user_score
+  SET
+    total_tip=current_tip+NEW.tip,
+    total_livecomments=current_comments+1
+  WHERE user_id=uid;
 END //
 DELIMITER ;

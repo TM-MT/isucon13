@@ -1634,6 +1634,7 @@ struct UserModel {
 struct UserRankModel {
     total_reactions: i64,
     total_tip: i64,
+    total_livecomments: i64,
     user_rank: u64,
 }
 
@@ -2053,39 +2054,27 @@ async fn get_user_statistics_handler(
             user_id,
             total_reactions,
             total_tip,
+            total_livecomments,
             (SELECT COUNT(*) FROM users) + 1 - RANK() OVER (ORDER BY (total_reactions + total_tip),u.name ASC) AS user_rank
         FROM user_score
         LEFT JOIN users u ON user_id=u.id
         GROUP BY user_id
     )
-    SELECT total_reactions, total_tip, user_rank FROM t WHERE user_id=?;
+    SELECT total_reactions, total_tip, total_livecomments, user_rank FROM t WHERE user_id=?;
     #";
     let UserRankModel {
         total_reactions,
         total_tip,
+        total_livecomments,
         user_rank,
     } = sqlx::query_as(query)
         .bind(user.id)
         .fetch_one(&mut *tx)
         .await?;
 
-    // ライブコメント数、チップ合計
-    let mut total_livecomments = 0;
     let livestreams: Vec<LivestreamModel> = user_id_to_livestreams_cache
         .get_or_insert(&mut tx, user.id)
         .await;
-
-    for livestream in &livestreams {
-        let livecomments: Vec<LivecommentModel> =
-            sqlx::query_as("SELECT * FROM livecomments WHERE livestream_id = ?")
-                .bind(livestream.id)
-                .fetch_all(&mut *tx)
-                .await?;
-
-        for _livecomment in livecomments {
-            total_livecomments += 1;
-        }
-    }
 
     // 合計視聴者数
     let mut viewers_count = 0;
