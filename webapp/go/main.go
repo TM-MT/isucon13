@@ -18,6 +18,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/gorilla/sessions"
+	"github.com/labstack/echo-contrib/echoprometheus"
 	"github.com/labstack/echo-contrib/session"
 	echolog "github.com/labstack/gommon/log"
 )
@@ -123,6 +124,7 @@ func main() {
 	e.Debug = true
 	e.Logger.SetLevel(echolog.DEBUG)
 	e.Use(middleware.Logger())
+	e.Use(echoprometheus.NewMiddleware("app"))
 	cookieStore := sessions.NewCookieStore(secret)
 	cookieStore.Options.Domain = "*.u.isucon.dev"
 	e.Use(session.Middleware(cookieStore))
@@ -181,6 +183,9 @@ func main() {
 
 	// 課金情報
 	e.GET("/api/payment", GetPaymentResult)
+
+	// Prometheus 計測用API
+	e.GET("/metrics", echoprometheus.NewHandler())
 
 	e.HTTPErrorHandler = errorResponseHandler
 

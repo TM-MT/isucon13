@@ -53,6 +53,19 @@ services:
       mysql:
         condition: service_healthy
 
+  # For Develop use
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      webapp:
+        condition: service_started
+
+
 volumes:
   mysql_volume:
   powerdns_volume:
