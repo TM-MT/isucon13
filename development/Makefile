@@ -1,15 +1,27 @@
+DOCKER_COMPOSE=docker compose -f docker-compose-common.yml -f docker-compose-go.yml
+
 build/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml up --build
+	$(DOCKER_COMPOSE) up --build
 
 up/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml up
+	$(DOCKER_COMPOSE) up
 
 down/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml down --volumes
+	$(DOCKER_COMPOSE) down --volumes
 
 down-all/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml down --volumes --rmi local
+	$(DOCKER_COMPOSE) down --volumes --rmi local
 
 top/%:
-	sudo docker compose -f docker-compose-common.yml -f docker-compose-$*.yml top
+	$(DOCKER_COMPOSE) top
 
+# 計測データを初期化する
+.PHONY: truncate-mysql
+truncate-mysql:
+	$(DOCKER_COMPOSE) exec -- mysql mysql -u root -proot isupipe -e "TRUNCATE TABLE performance_schema.events_statements_summary_by_digest"
+
+
+# 計測データを吐く
+.PHONY: analyze-mysql
+analyze-mysql:
+	$(DOCKER_COMPOSE) exec -- mysql mysql -u root -proot isupipe < ../performance_schema.sql > ../webapp/logs/mysql/performance_schema.tsv
