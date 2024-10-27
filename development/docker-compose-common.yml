@@ -65,6 +65,17 @@ services:
       webapp:
         condition: service_started
 
+  mysqld_exporter:
+    image: prom/mysqld-exporter
+    container_name: mysqld_exporter
+    volumes:
+      - ./etc/mysqld_exporter/.my.cnf:/.my.cnf
+    ports:
+      - "127.0.0.1:9104:9104"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
 
 volumes:
   mysql_volume:
