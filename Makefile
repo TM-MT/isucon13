@@ -17,3 +17,8 @@ build_webapp:
 	$(MAKE) webapp/go docker_image
 .PHONY: build_webapp
 
+.PHONY: bench
+bench:
+	cd development && make truncate-mysql
+	cd bench && make bench
+	cd development && make analyze-mysql
