@@ -22,3 +22,7 @@ bench:
 	cd development && make truncate-mysql
 	cd bench && make bench
 	cd development && make analyze-mysql
+
+.PHONY: pretest
+pretest:
+	cd bench && make pretest
