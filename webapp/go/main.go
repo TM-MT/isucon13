@@ -16,6 +16,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/sevenNt/echo-pprof"
 
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/echoprometheus"
@@ -185,6 +186,8 @@ func main() {
 
 	// Prometheus 計測用API
 	e.GET("/metrics", echoprometheus.NewHandler())
+	// pprof用エンドポイントを作成
+	echopprof.Wrap(e)
 
 	e.HTTPErrorHandler = errorResponseHandler
 
