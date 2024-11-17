@@ -20,10 +20,13 @@ build_webapp:
 .PHONY: bench
 bench:
 	cd development && make truncate-mysql
-	go tool pprof -seconds 90 -http=localhost:1080 http://localhost:8080/debug/pprof/profile &
 	cd bench && make bench
 	cd development && make analyze-mysql
 
 .PHONY: pretest
 pretest:
 	cd bench && make pretest
+
+.PHONY: profile
+profile:
+	go tool pprof -seconds 90 -source_path=/home/tatsuya/ghq/github.com/isucon/isucon13/webapp/go -http=localhost:1080 http://localhost:8080/debug/pprof/profile
