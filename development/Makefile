@@ -25,3 +25,7 @@ truncate-mysql:
 .PHONY: analyze-mysql
 analyze-mysql:
 	$(DOCKER_COMPOSE) exec -- mysql mysql -u root -proot isupipe < ../performance_schema.sql > ../webapp/logs/mysql/performance_schema.tsv
+
+.PHONY: exec-mysql
+exec-mysql:
+	$(DOCKER_COMPOSE) exec -- mysql mysql -u isucon --password
