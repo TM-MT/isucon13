@@ -4,7 +4,7 @@ build/%:
 	$(DOCKER_COMPOSE) up --build
 
 up/%:
-	$(DOCKER_COMPOSE) up
+	$(DOCKER_COMPOSE) up --force-recreate
 
 down/%:
 	$(DOCKER_COMPOSE) down --volumes

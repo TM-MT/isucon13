@@ -13,3 +13,7 @@ GRANT ALL PRIVILEGES ON isudns.* TO 'isudns'@'%';
 DROP USER IF EXISTS `exporter`@`%`;
 CREATE USER 'exporter'@'%' IDENTIFIED BY 'exporter' WITH MAX_USER_CONNECTIONS 3;
 GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'exporter'@'%';
+
+DROP USER IF EXISTS `grafana`@`%`;
+CREATE USER 'grafana'@'%' IDENTIFIED BY 'grafana';
+GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'grafana'@'%';

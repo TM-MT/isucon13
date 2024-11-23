@@ -1,0 +1,50 @@
+networks:
+  default:
+    name: development_default
+    external: true
+# 本番利用では上２つをコメントアウトして、こっちを使う
+# driver: host
+
+services:
+#   loki:
+#     image: grafana/loki:2.9.2
+#     ports:
+#       - "3100:3100"
+#     command: -config.file=/etc/loki/local-config.yaml
+
+# promtail:
+#   image: grafana/promtail:2.9.2
+#   volumes:
+#     - /var/log:/var/log
+#   command: -config.file=/etc/promtail/config.yml
+#   networks:
+#     - grafana
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    environment:
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GRAFANA_MYSQL_PASSWORD=grafana
+    entrypoint:
+      - sh
+      - -euc
+      - /run.sh
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_storage:/var/lib/grafana
+      - ./etc/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./etc/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+
+volumes:
+  grafana_storage:
